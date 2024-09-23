@@ -5,7 +5,7 @@ import json
 from transformers import MarianMTModel, MarianTokenizer
 
 TEMP_FOLDER = os.path.join('temp')
-#TEMP_FOLDER = os.path.join('src', 'components', 'temp')
+TRANSCRIPTIONS_FOLDER = os.path.join(TEMP_FOLDER, 'transcriptions')
 TRANSLATIONS_FOLDER = os.path.join(TEMP_FOLDER, 'translations')
 
 # Ensure the translations folder exists
@@ -25,7 +25,7 @@ def translate_text(text, model, tokenizer):
 
 def process_translation(transcription_file, target_language):
     try:
-        full_path = os.path.join(TEMP_FOLDER, transcription_file)
+        full_path = os.path.join(TRANSCRIPTIONS_FOLDER, transcription_file)
         with open(full_path, "r", encoding='utf-8') as f:
             transcription_data = json.load(f)
         
@@ -66,12 +66,12 @@ def process_translation(transcription_file, target_language):
     return None
 
 def list_transcription_files():
-    return [f for f in os.listdir(TEMP_FOLDER) if f.endswith("_transcription.json")]
+    return [f for f in os.listdir(TRANSCRIPTIONS_FOLDER) if f.endswith("_transcription.json")]
 
 if __name__ == "__main__":
     transcription_files = list_transcription_files()
     if not transcription_files:
-        print("No transcription files found in the temp folder.")
+        print("No transcription files found in the temp/transcriptions folder.")
     else:
         print("Available transcription files:")
         for i, file in enumerate(transcription_files, 1):

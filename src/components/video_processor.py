@@ -3,7 +3,7 @@ import os
 
 class VideoProcessor:
     def __init__(self, output_dir='temp'):
-        self.output_dir = output_dir
+        self.output_dir = os.path.join(output_dir, 'originalaudio')
         os.makedirs(output_dir, exist_ok=True)
 
     def process_youtube(self, url):
