@@ -1,30 +1,9 @@
-# Ignore Python environment directories
+.env
+
 venv/
+
 __pycache__/
 *.py[cod]
 
-# Ignore environment variable files
-.env
+src/components/temp
 
-# Ignore temporary files
-*.log
-*.tmp
-*.temp
-
-# Ignore compiled files
-*.o
-*.so
-*.dll
-*.exe
-
-# Ignore Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Ignore other cloned repositories
-*/.git/
-*/.gitignore
-
-# Ignore specific directories or files
-temp/
-src/components/temp/
-src/components/voice_conversion_models/
