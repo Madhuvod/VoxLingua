@@ -1,7 +1,9 @@
 import sys
 import os
 import glob
-from dotenv import load_env
+from dotenv import load_dotenv
+
+load_dotenv()
 # Add the parent directory of 'voice_conversion_models' to the Python path
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(parent_dir)
