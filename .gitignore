@@ -6,4 +6,5 @@ __pycache__/
 *.py[cod]
 
 src/components/temp
-
+voice_conversion_models/Applio/
+voice_conversion_models/OpenVoice/
