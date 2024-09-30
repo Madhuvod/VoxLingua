@@ -111,6 +111,7 @@ def diarize_audio(audio_path):
                 try:
                     emb = spk_model.encode_batch(segment)
                     embeddings.append(emb.squeeze().cpu().numpy())
+                    print(f"Added embedding {len(embeddings)}: {emb.squeeze().cpu().numpy()}")
                     segments.append((start_sample / sample_rate, end_sample / sample_rate))
                 except Exception as e:
                     print(f"Error encoding segment ({start_sample/sample_rate:.2f}s - {end_sample/sample_rate:.2f}s): {e}")
@@ -178,7 +179,7 @@ def process_audio(original_audio, translated_audio, output_dir):
     diarization_result = diarize_audio(original_audio)
     if not diarization_result['segments']:
         print("Diarization returned no segments. Exiting.")
-        sys.exit(1)
+        return None
     
     print("Diarization complete. Extracting main speaker...")
     
@@ -188,23 +189,61 @@ def process_audio(original_audio, translated_audio, output_dir):
     main_speaker = unique_speakers[np.argmax(counts)]
     print(f"Main speaker identified as Speaker {main_speaker}")
     
-    # Extract audio for main speaker
-    main_speaker_audio = os.path.join(output_dir, "main_speaker.wav")
+    # Load the original audio
     audio, sample_rate = torchaudio.load(original_audio)
-    main_speaker_segments = torch.zeros_like(audio)
     
-    for segment in diarization_result['segments']:
-        if segment[2] == main_speaker:
+    # Find all segments for the main speaker
+    main_speaker_segments = [segment for segment in diarization_result['segments'] if segment[2] == main_speaker]
+    
+    # Calculate total duration of main speaker's audio
+    total_duration = sum(segment[1] - segment[0] for segment in main_speaker_segments)
+    
+    # Target duration for extracted audio (5 seconds)
+    target_duration = 5.0
+    
+    # If total duration is less than target, use all available audio
+    if total_duration <= target_duration:
+        extracted_audio = torch.zeros(audio.shape[0], int(total_duration * sample_rate))
+        current_index = 0
+        for segment in main_speaker_segments:
             start_sample = int(segment[0] * sample_rate)
             end_sample = int(segment[1] * sample_rate)
-            main_speaker_segments[:, start_sample:end_sample] = audio[:, start_sample:end_sample]
+            segment_duration = end_sample - start_sample
+            extracted_audio[:, current_index:current_index + segment_duration] = audio[:, start_sample:end_sample]
+            current_index += segment_duration
+    else:
+        # Find the middle point of the main speaker's total audio
+        mid_point = total_duration / 2
+        cumulative_duration = 0
+        start_segment = None
+        for segment in main_speaker_segments:
+            if cumulative_duration + (segment[1] - segment[0]) >= mid_point:
+                start_segment = segment
+                break
+            cumulative_duration += segment[1] - segment[0]
+        
+        # Extract 5 seconds of audio centered around the middle point
+        start_time = max(start_segment[0] + (mid_point - cumulative_duration) - target_duration / 2, 0)
+        end_time = start_time + target_duration
+        
+        start_sample = int(start_time * sample_rate)
+        end_sample = int(end_time * sample_rate)
+        extracted_audio = audio[:, start_sample:end_sample]
     
-    # Save the extracted main speaker audio
-    torchaudio.save(main_speaker_audio, main_speaker_segments, sample_rate)
-    print(f"Main speaker audio saved to: {main_speaker_audio}")
+    # Get the base name of the original audio file (without extension)
+    original_audio_name = os.path.splitext(os.path.basename(original_audio))[0]
+    
+    # Save the extracted main speaker audio with the new naming convention
+    main_speaker_audio = os.path.join(output_dir, f"{original_audio_name}_main_speaker.wav")
+    torchaudio.save(main_speaker_audio, extracted_audio, sample_rate)
+    print(f"Main speaker audio (duration: {extracted_audio.shape[1]/sample_rate:.2f}s) saved to: {main_speaker_audio}")
     
     print("Starting voice cloning...")
-    output_path = os.path.join(output_dir, "cloned_translated_audio.wav")
+    
+    # Create the output filename for the cloned and translated audio
+    output_filename = f"{original_audio_name}.cloned_translated_audio.wav"
+    output_path = os.path.join(output_dir, output_filename)
+    
     clone_voice(main_speaker_audio, translated_audio, output_path)
     print("Voice cloning complete.")
     
@@ -234,4 +273,7 @@ if __name__ == "__main__":
     print(f"Ensured that the output directory exists: {output_dir}")
     
     cloned_audio_path = process_audio(original_audio, translated_audio, output_dir)
-    print(f"Voice cloned audio saved to: {cloned_audio_path}")
+    if cloned_audio_path:
+        print(f"Voice cloned audio saved to: {cloned_audio_path}")
+    else:
+        print("Voice cloning process failed.")
