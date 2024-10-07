@@ -8,3 +8,4 @@ __pycache__/
 src/components/temp
 voice_conversion_models/Applio/
 voice_conversion_models/OpenVoice/
+voice_conversion_models/GPT-SoVITS

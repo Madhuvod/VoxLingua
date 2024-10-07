@@ -1,5 +1,6 @@
 import os
 import sys
+import gradio as gr
 
 # Add the parent directory to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -10,57 +11,47 @@ from components.video_processor import VideoProcessor
 from components.speech_recognition import transcribe_audio
 from components.text_translator import process_translation
 from components.text_to_speech import text_to_speech
-from components.voice_cloning2 import process_audio
 
-def main():
+def process_youtube_link(youtube_link, target_language):
     # Step 1: Download YouTube video and extract audio
     processor = VideoProcessor()
-    youtube_url = input("Enter the YouTube video URL: ")
-    audio_path, video_path = processor.process_youtube(youtube_url)
+    audio_path, video_path = processor.process_youtube(youtube_link)
 
     if not audio_path:
-        print("Failed to process YouTube audio. Exiting.")
-        return
-
-    print(f"Audio downloaded to: {audio_path}")
-    print(f"Video (without audio) downloaded to: {video_path}")
+        return "Failed to process YouTube audio."
 
     # Step 2: Transcribe the audio
     transcription_file = transcribe_audio(os.path.basename(audio_path))
     if not transcription_file:
-        print("Transcription failed. Exiting.")
-        return
-
-    print(f"Transcription saved to: {transcription_file}")
+        return "Transcription failed."
 
     # Step 3: Translate the transcription
-    target_language = input("Enter the target language code (e.g., 'es' for Spanish): ")
     translation_file = process_translation(transcription_file, target_language)
     if not translation_file:
-        print("Translation failed. Exiting.")
-        return
-
-    print(f"Translation saved to: {translation_file}")
+        return "Translation failed."
 
     # Step 4: Convert translated text to speech
     tts_output = text_to_speech(translation_file, target_language)
     if not tts_output:
-        print("Text-to-speech conversion failed. Exiting.")
-        return
+        return "Text-to-speech conversion failed."
 
-    print(f"Text-to-speech output saved to: {tts_output}")
+    return tts_output
 
-    # Step 5: Clone voice
-    output_dir = os.path.join(parent_dir, "temp", "voice_cloned_output")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    cloned_audio_path = process_audio(audio_path, tts_output, output_dir)
-    if not cloned_audio_path:
-        print("Voice cloning failed. Exiting.")
-        return
+# Define the Gradio interface
+interface = gr.Interface(
+    fn=process_youtube_link,
+    inputs=[
+        gr.Textbox(label="YouTube Link"),
+        gr.Dropdown(
+            choices=["en", "es", "fr", "de"],  # Add more language codes as needed
+            label="Target Language"
+        )
+    ],
+    outputs=gr.Audio(label="Translated Audio"),
+    title="YouTube Audio Translator",
+    description="Upload a YouTube link and select a target language to get the translated audio."
+)
 
-    print(f"Voice cloned audio saved to: {cloned_audio_path}")
-    print("Process completed successfully!")
-
+# Launch the interface
 if __name__ == "__main__":
-    main()
+    interface.launch()

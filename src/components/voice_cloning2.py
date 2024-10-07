@@ -3,6 +3,7 @@ import torch
 import torchaudio
 import sys
 import numpy as np
+import json
 from pydub import AudioSegment
 from speechbrain.inference import EncoderClassifier
 from sklearn.cluster import KMeans
@@ -42,117 +43,93 @@ except Exception as e:
 load_dotenv()
 
 # Function to perform diarization using an energy-based VAD
-def diarize_audio(audio_path):
-    # Load the audio file
-    waveform, sample_rate = torchaudio.load(audio_path)
-    
-    # Convert to mono if stereo
-    if waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
-    
-    # Resample to 16kHz (common for speech processing)
-    target_sample_rate = 16000
-    if sample_rate != target_sample_rate:
-        print(f"Resampling audio from {sample_rate} Hz to {target_sample_rate} Hz")
-        resampler = T.Resample(orig_freq=sample_rate, new_freq=target_sample_rate)
-        waveform = resampler(waveform)
-        sample_rate = target_sample_rate
-    
-    # Normalize audio
-    max_val = torch.max(torch.abs(waveform))
-    if max_val > 0:
-        waveform = waveform / max_val
-    
-    # Simple energy-based VAD
-    frame_length = int(0.025 * sample_rate)  # 25ms
-    hop_length = int(0.010 * sample_rate)    # 10ms
-    window = torch.hann_window(frame_length).to(waveform.device)
-    
-    # Compute Short-Time Fourier Transform (STFT)
-    stft = torch.stft(
-        waveform[0],
-        n_fft=frame_length,
-        hop_length=hop_length,
-        win_length=frame_length,
-        window=window,
-        return_complex=True
-    )
-    
-    # Compute energy
-    energy = stft.abs().pow(2).sum(dim=1).sqrt()
-    
-    # Determine threshold
-    threshold = energy.mean() * 0.5
-    print(f"Energy threshold set to: {threshold.item()}")
-    
-    # Detect speech frames
-    speech_frames = energy > threshold  # Tensor of shape [num_frames]
-    
-    # Initialize the speaker recognition model
-    spk_model = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir="pretrained_models/spkrec-ecapa-voxceleb")
-    
-    # Extract embeddings for each speech segment
-    embeddings = []
-    segments = []
-    i = 0
-    len_speech_frames = speech_frames.shape[0]
-    while i < len_speech_frames:
-        if speech_frames[i]:
-            start_frame = i
-            # Accumulate frames until speech_frames[i] becomes False or we reach segment_length
-            end_frame = i
-            while end_frame < len_speech_frames and speech_frames[end_frame] and (end_frame - start_frame) * hop_length < sample_rate:
-                end_frame += 1
-            # Get start and end samples
-            start_sample = start_frame * hop_length
-            end_sample = min(start_sample + sample_rate, waveform.shape[1])  # 1 second segments
-            segment = waveform[:, start_sample:end_sample]
-            if segment.shape[1] >= int(0.5 * sample_rate):  # Minimum 0.5 sec
-                try:
-                    emb = spk_model.encode_batch(segment)
-                    embeddings.append(emb.squeeze().cpu().numpy())
-                    print(f"Added embedding {len(embeddings)}: {emb.squeeze().cpu().numpy()}")
-                    segments.append((start_sample / sample_rate, end_sample / sample_rate))
-                except Exception as e:
-                    print(f"Error encoding segment ({start_sample/sample_rate:.2f}s - {end_sample/sample_rate:.2f}s): {e}")
-            i = end_frame
+def diarize_audio(audio_path, segment_duration=6.0):
+    try:
+        # Load the audio file
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        # Convert to mono if stereo
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # Resample to 16kHz
+        target_sample_rate = 16000
+        if sample_rate != target_sample_rate:
+            resampler = T.Resample(orig_freq=sample_rate, new_freq=target_sample_rate)
+            waveform = resampler(waveform)
+            sample_rate = target_sample_rate
+        
+        # Initialize the speaker recognition model
+        spk_model = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir="pretrained_models/spkrec-ecapa-voxceleb")
+        
+        # Extract embeddings
+        embeddings = spk_model.encode_batch(waveform)
+        num_embeddings = embeddings.shape[0]
+        
+        if num_embeddings == 1:
+            labels = np.array([0])
+            main_speaker = 0
+            extracted_audio = waveform
         else:
-            i += 1
+            n_clusters = min(2, num_embeddings)
+            kmeans = KMeans(n_clusters=n_clusters)
+            kmeans.fit(embeddings.cpu().numpy())
+            labels = kmeans.labels_
+            
+            unique_labels, counts = np.unique(labels, return_counts=True)
+            main_speaker = unique_labels[np.argmax(counts)]
+            
+            main_speaker_segments = [waveform[:, i] for i in range(embeddings.shape[0]) if labels[i] == main_speaker]
+            extracted_audio = torch.cat(main_speaker_segments, dim=1).unsqueeze(0)
+            
+            desired_length = int(segment_duration * sample_rate)
+            if extracted_audio.shape[1] > desired_length:
+                mid_sample = desired_length // 2
+                start = (extracted_audio.shape[1] // 2) - mid_sample
+                end = start + desired_length
+                extracted_audio = extracted_audio[:, start:end]
+            elif extracted_audio.shape[1] < desired_length:
+                pad_length = desired_length - extracted_audio.shape[1]
+                padding = torch.zeros((extracted_audio.shape[0], pad_length))
+                extracted_audio = torch.cat((extracted_audio, padding), dim=1)
+        
+        # Save the extracted main speaker audio
+        extracted_audio_path = os.path.splitext(audio_path)[0] + "_main_speaker.wav"
+        torchaudio.save(extracted_audio_path, extracted_audio, sample_rate)
+        
+        # Return the extracted audio path and segments
+        return {"extracted_audio": extracted_audio_path, "segments": [(0, extracted_audio.shape[1] / sample_rate, main_speaker)]}
     
-    if len(embeddings) == 0:
-        print("No valid speech segments found after processing.")
-        return {"segments": []}
-    
-    # Perform clustering on embeddings
-    kmeans = KMeans(n_clusters=2, random_state=0).fit(embeddings)
-    
-    # Assign clusters to speech segments
-    labels = kmeans.labels_
-    
-    # Group segments by speaker
-    segments_grouped = []
-    current_speaker = labels[0]
-    current_start = segments[0][0]
-    for idx in range(1, len(labels)):
-        if labels[idx] != current_speaker:
-            current_end = segments[idx-1][1]
-            segments_grouped.append((current_start, current_end, current_speaker))
-            current_speaker = labels[idx]
-            current_start = segments[idx][0]
-    # Add the last segment
-    segments_grouped.append((current_start, segments[-1][1], current_speaker))
-    
-    return {"segments": segments_grouped}
+    except Exception as e:
+        print(f"Diarization failed: {e}")
+        return None
 
 # Function to extract speaker embeddings
 def extract_speaker_embedding(audio_path):
     return tone_color_converter.extract_se(audio_path)
 
-# Function to clone voice
-def clone_voice(source_audio, target_audio, output_path):
-    source_embedding = extract_speaker_embedding(source_audio)
-    target_embedding = extract_speaker_embedding(target_audio)
-    tone_color_converter.convert(target_audio, target_embedding, source_embedding, output_path)
+# Function to clone voice using translated text
+def clone_voice_with_text(source_audio, translated_text, output_path):
+    try:
+        # Extract speaker embedding from the source audio
+        source_embedding = extract_speaker_embedding(source_audio)
+        
+        # Assuming the speaker embedding can be used as a speaker ID
+        # You might need to map the embedding to a speaker ID if required
+        speaker_id = source_embedding  # Adjust this line as needed
+        
+        # Use the tts method to synthesize the audio
+        base_speaker_tts.tts(
+            text=translated_text,
+            output_path=output_path,
+            speaker=speaker_id,  # Ensure this is the correct format for speaker
+            language='English',  # Adjust language if needed
+            speed=1.0
+        )
+        
+        print(f"Voice cloned audio saved to: {output_path}")
+    except Exception as e:
+        print(f"Voice cloning failed: {e}")
 
 # Function to list files and let user select one
 def select_file(directory, file_type):
@@ -173,8 +150,18 @@ def select_file(directory, file_type):
         except ValueError:
             print("Invalid input. Please enter a number.")
 
+# Function to read translated text from a JSON file
+def read_translated_text(json_file_path):
+    try:
+        with open(json_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get("translated_text", "")
+    except Exception as e:
+        print(f"Failed to read translated text from JSON: {e}")
+        return ""
+
 # Main process
-def process_audio(original_audio, translated_audio, output_dir):
+def process_audio(original_audio, translated_json_path, output_dir):
     print("Starting diarization...")
     diarization_result = diarize_audio(original_audio)
     if not diarization_result['segments']:
@@ -183,69 +170,22 @@ def process_audio(original_audio, translated_audio, output_dir):
     
     print("Diarization complete. Extracting main speaker...")
     
-    # Extract speakers and count occurrences
-    speakers = [segment[2] for segment in diarization_result['segments']]
-    unique_speakers, counts = np.unique(speakers, return_counts=True)
-    main_speaker = unique_speakers[np.argmax(counts)]
-    print(f"Main speaker identified as Speaker {main_speaker}")
+    # Extract main speaker audio
+    main_speaker_audio = diarization_result['extracted_audio']
     
-    # Load the original audio
-    audio, sample_rate = torchaudio.load(original_audio)
+    # Read the translated text from JSON
+    translated_text = read_translated_text(translated_json_path)
+    if not translated_text:
+        print("No translated text found in JSON. Exiting.")
+        return None
     
-    # Find all segments for the main speaker
-    main_speaker_segments = [segment for segment in diarization_result['segments'] if segment[2] == main_speaker]
-    
-    # Calculate total duration of main speaker's audio
-    total_duration = sum(segment[1] - segment[0] for segment in main_speaker_segments)
-    
-    # Target duration for extracted audio (5 seconds)
-    target_duration = 5.0
-    
-    # If total duration is less than target, use all available audio
-    if total_duration <= target_duration:
-        extracted_audio = torch.zeros(audio.shape[0], int(total_duration * sample_rate))
-        current_index = 0
-        for segment in main_speaker_segments:
-            start_sample = int(segment[0] * sample_rate)
-            end_sample = int(segment[1] * sample_rate)
-            segment_duration = end_sample - start_sample
-            extracted_audio[:, current_index:current_index + segment_duration] = audio[:, start_sample:end_sample]
-            current_index += segment_duration
-    else:
-        # Find the middle point of the main speaker's total audio
-        mid_point = total_duration / 2
-        cumulative_duration = 0
-        start_segment = None
-        for segment in main_speaker_segments:
-            if cumulative_duration + (segment[1] - segment[0]) >= mid_point:
-                start_segment = segment
-                break
-            cumulative_duration += segment[1] - segment[0]
-        
-        # Extract 5 seconds of audio centered around the middle point
-        start_time = max(start_segment[0] + (mid_point - cumulative_duration) - target_duration / 2, 0)
-        end_time = start_time + target_duration
-        
-        start_sample = int(start_time * sample_rate)
-        end_sample = int(end_time * sample_rate)
-        extracted_audio = audio[:, start_sample:end_sample]
-    
-    # Get the base name of the original audio file (without extension)
+    # Define output path for the cloned audio
     original_audio_name = os.path.splitext(os.path.basename(original_audio))[0]
-    
-    # Save the extracted main speaker audio with the new naming convention
-    main_speaker_audio = os.path.join(output_dir, f"{original_audio_name}_main_speaker.wav")
-    torchaudio.save(main_speaker_audio, extracted_audio, sample_rate)
-    print(f"Main speaker audio (duration: {extracted_audio.shape[1]/sample_rate:.2f}s) saved to: {main_speaker_audio}")
-    
-    print("Starting voice cloning...")
-    
-    # Create the output filename for the cloned and translated audio
     output_filename = f"{original_audio_name}.cloned_translated_audio.wav"
     output_path = os.path.join(output_dir, output_filename)
     
-    clone_voice(main_speaker_audio, translated_audio, output_path)
-    print("Voice cloning complete.")
+    # Perform voice cloning
+    clone_voice_with_text(main_speaker_audio, translated_text, output_path)
     
     return output_path
 
@@ -254,25 +194,25 @@ if __name__ == "__main__":
     parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     
     original_audio_dir = os.path.join(parent_dir, "src", "components", "temp", "originalaudio")
-    translated_audio_dir = os.path.join(parent_dir, "src", "components", "temp", "tts_output")
+    translated_json_dir = os.path.join(parent_dir, "src", "components", "temp", "translations")
     output_dir = os.path.join(parent_dir, "src", "components", "temp", "voice_cloned_output")
     
     print(f"Original Audio Directory: {original_audio_dir}")
-    print(f"Translated Audio Directory: {translated_audio_dir}")
+    print(f"Translated JSON Directory: {translated_json_dir}")
     print(f"Output Directory: {output_dir}")
     
     original_audio = select_file(original_audio_dir, ".wav")
     if not original_audio:
         sys.exit(1)
     
-    translated_audio = select_file(translated_audio_dir, ".mp3")
-    if not translated_audio:
+    translated_json_path = select_file(translated_json_dir, ".json")
+    if not translated_json_path:
         sys.exit(1)
     
     os.makedirs(output_dir, exist_ok=True)
     print(f"Ensured that the output directory exists: {output_dir}")
     
-    cloned_audio_path = process_audio(original_audio, translated_audio, output_dir)
+    cloned_audio_path = process_audio(original_audio, translated_json_path, output_dir)
     if cloned_audio_path:
         print(f"Voice cloned audio saved to: {cloned_audio_path}")
     else:
