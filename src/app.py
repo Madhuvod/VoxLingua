@@ -52,6 +52,6 @@ interface = gr.Interface(
     description="Upload a YouTube link and select a target language to get the translated audio."
 )
 
-# Launch the interface
+# Launch the interface with a public link
 if __name__ == "__main__":
-    interface.launch()
+    interface.launch(share=True)
