@@ -74,13 +74,12 @@ class VideoProcessor:
                 sanitized_title = self.sanitize_filename(video_title)
 
                 video_path = os.path.join(self.video_output_dir, f'{sanitized_title}.mp4')
-                # Rename the downloaded file to match the YouTube video title
+                # Renamingg the downloaded file to match the YouTube video title
                 downloaded_filename = ydl.prepare_filename(info).replace('.webm', '.mp4')
                 os.rename(downloaded_filename, video_path)
 
                 print(f"Video downloaded successfully as {video_path}.")
 
-                # Removing audio from the video
                 video_no_audio_path = os.path.splitext(video_path)[0] + '_no_audio.mp4'
                 command = [
                     'ffmpeg',
@@ -92,7 +91,7 @@ class VideoProcessor:
                 result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if result.returncode == 0:
                     print("Video processed successfully (audio removed).")
-                    os.remove(video_path)  # Remove the original video with audio
+                    os.remove(video_path)  
 
                     # Upload to S3
                     s3_file_name = f"{sanitized_title}-video_no_audio.mp4"
@@ -113,7 +112,7 @@ class VideoProcessor:
 
 # Example usage
 if __name__ == "__main__":
-    bucket_name = 'original-audio-video-voxlingua-main'  # Replace with your S3 bucket name
+    bucket_name = 'original-audio-video-voxlingua-main'  
     processor = VideoProcessor(bucket_name=bucket_name)
     
     youtube_url = input("Enter the YouTube video URL: ")
