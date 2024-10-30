@@ -4,7 +4,7 @@
 
 ## Project Status
 
-This project is currently under development (as of October 2024). I am working on the voice cloning model, experimenting with RVC, CoquiXTTS, OpenVoice, and GPT-SoVITS, trying to find the best solution for cloning the voice.
+decided to use coquiXTTS w ec2 instance for the voice cloning part, f5-tts is also a better alternative but pnly supports eng and chinese. integrating aws s3 and ec2, lambda with the project, done with video_processing.py
 
 ## Project Architecture
 
